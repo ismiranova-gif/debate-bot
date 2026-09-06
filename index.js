@@ -25,7 +25,7 @@ async function askBot(chatId, userText) {
   const trimmedHistory = sessions[chatId].slice(-10);
 
   const completion = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
+   model: 'openai/gpt-oss-120b',
     messages: [
       { role: 'system', content: systemPrompt },
       ...trimmedHistory
