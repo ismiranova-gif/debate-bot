@@ -33,7 +33,8 @@ async function askBot(chatId, userText) {
     max_tokens: 1500
   });
 
-  const reply = completion.choices[0].message.content;
+  let reply = completion.choices[0].message.content;
+reply = reply.replace(/<br\s*\/?>/gi, '\n');
   sessions[chatId].push({ role: 'assistant', content: reply });
   return reply;
 }
