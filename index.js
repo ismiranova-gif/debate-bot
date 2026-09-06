@@ -30,7 +30,7 @@ async function askBot(chatId, userText) {
       { role: 'system', content: systemPrompt },
       ...trimmedHistory
     ],
-    max_tokens: 800
+    max_tokens: 1500
   });
 
   const reply = completion.choices[0].message.content;
