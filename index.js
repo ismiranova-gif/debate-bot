@@ -16,16 +16,29 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Храним историю диалога отдельно для каждого чата
 const sessions = {};
+const sessionTimestamps = {};
+
+// Раз в час удаляем сессии, неактивные больше 2 часов — чтобы не переполнять память
+setInterval(() => {
+  const now = Date.now();
+  for (const chatId in sessionTimestamps) {
+    if (now - sessionTimestamps[chatId] > 2 * 60 * 60 * 1000) {
+      delete sessions[chatId];
+      delete sessionTimestamps[chatId];
+    }
+  }
+}, 60 * 60 * 1000);
 
 async function askBot(chatId, userText) {
   if (!sessions[chatId]) sessions[chatId] = [];
+  sessionTimestamps[chatId] = Date.now();
   sessions[chatId].push({ role: 'user', content: userText });
 
   // Ограничиваем историю последними 10 сообщениями, чтобы не тратить лимит зря
   const trimmedHistory = sessions[chatId].slice(-10);
 
   const completion = await groq.chat.completions.create({
-   model: 'openai/gpt-oss-120b',
+    model: 'openai/gpt-oss-120b',
     messages: [
       { role: 'system', content: systemPrompt },
       ...trimmedHistory
@@ -34,7 +47,8 @@ async function askBot(chatId, userText) {
   });
 
   let reply = completion.choices[0].message.content;
-reply = reply.replace(/<br\s*\/?>/gi, '\n');
+  reply = reply.replace(/<br\s*\/?>/gi, '\n');
+
   sessions[chatId].push({ role: 'assistant', content: reply });
   return reply;
 }
