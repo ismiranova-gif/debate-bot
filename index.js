@@ -6,8 +6,9 @@ const systemPrompt = require('./systemPrompt');
 
 const token = process.env.TELEGRAM_TOKEN;
 const webhookUrl = process.env.WEBHOOK_URL;
+const safeToken = token.replace(/:/g, '_');
 
-// Бот теперь БЕЗ polling — работает через webhook
+// Бот работает через webhook, без polling
 const bot = new TelegramBot(token);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -53,7 +54,6 @@ async function askBot(chatId, userText) {
   return reply;
 }
 
-// Обработчик входящих сообщений теперь вызывается через webhook, не через polling
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -76,8 +76,8 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Telegram будет присылать сообщения именно на этот адрес
-app.post(`/bot${token}`, (req, res) => {
+// Telegram присылает сообщения именно на этот адрес (двоеточие из токена заменено на _)
+app.post(`/bot${safeToken}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
@@ -88,10 +88,9 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   console.log('Веб-сервер запущен на порту', PORT);
 
-  // Регистрируем webhook у Telegram при каждом запуске
   try {
-    await bot.setWebHook(`${webhookUrl}/bot${token}`);
-    console.log('Webhook успешно установлен:', `${webhookUrl}/bot${token}`);
+    await bot.setWebHook(`${webhookUrl}/bot${safeToken}`);
+    console.log('Webhook успешно установлен:', `${webhookUrl}/bot${safeToken}`);
   } catch (err) {
     console.error('Ошибка установки webhook:', err.message);
   }
