@@ -48,6 +48,7 @@ async function askBot(chatId, userText) {
 
   let reply = completion.choices[0].message.content;
   reply = reply.replace(/<br\s*\/?>/gi, '\n');
+  reply = reply.replace(/\*\*/g, '');
 
   sessions[chatId].push({ role: 'assistant', content: reply });
   return reply;
