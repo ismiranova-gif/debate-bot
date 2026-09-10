@@ -1,24 +1,24 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const Groq = require('groq-sdk');
+const express = require('express');
 const systemPrompt = require('./systemPrompt');
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, {
-  polling: {
-    interval: 1000,
-    autoStart: true,
-    params: {
-      timeout: 5
-    }
-  }
-});
+const token = process.env.TELEGRAM_TOKEN;
+const webhookUrl = process.env.WEBHOOK_URL;
+
+// Бот теперь БЕЗ polling — работает через webhook
+const bot = new TelegramBot(token);
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const app = express();
+app.use(express.json());
 
 // Храним историю диалога отдельно для каждого чата
 const sessions = {};
 const sessionTimestamps = {};
 
-// Раз в час удаляем сессии, неактивные больше 2 часов — чтобы не переполнять память
+// Раз в час удаляем сессии, неактивные больше 2 часов
 setInterval(() => {
   const now = Date.now();
   for (const chatId in sessionTimestamps) {
@@ -34,7 +34,6 @@ async function askBot(chatId, userText) {
   sessionTimestamps[chatId] = Date.now();
   sessions[chatId].push({ role: 'user', content: userText });
 
-  // Ограничиваем историю последними 10 сообщениями, чтобы не тратить лимит зря
   const trimmedHistory = sessions[chatId].slice(-10);
 
   const completion = await groq.chat.completions.create({
@@ -54,13 +53,13 @@ async function askBot(chatId, userText) {
   return reply;
 }
 
+// Обработчик входящих сообщений теперь вызывается через webhook, не через polling
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
 
   if (!text) return;
 
-  // Команда для сброса сессии — начать новую тему
   if (text === '/new') {
     sessions[chatId] = [];
     bot.sendMessage(chatId, 'Ξεκινάμε νέα συνεδρία. Τι θέλεις να κάνουμε;');
@@ -77,15 +76,23 @@ bot.on('message', async (msg) => {
   }
 });
 
-bot.on('polling_error', (err) => {
-  console.log('Проблема с соединением, пробуем снова...', err.code);
+// Telegram будет присылать сообщения именно на этот адрес
+app.post(`/bot${token}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
 });
 
-console.log('Бот запущен и слушает сообщения...');
-
-const express = require('express');
-const app = express();
 app.get('/', (req, res) => res.send('Bot is running'));
-app.listen(process.env.PORT || 3000, () => {
-  console.log('Веб-сервер для Render запущен');
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  console.log('Веб-сервер запущен на порту', PORT);
+
+  // Регистрируем webhook у Telegram при каждом запуске
+  try {
+    await bot.setWebHook(`${webhookUrl}/bot${token}`);
+    console.log('Webhook успешно установлен:', `${webhookUrl}/bot${token}`);
+  } catch (err) {
+    console.error('Ошибка установки webhook:', err.message);
+  }
 });
