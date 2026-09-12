@@ -1,0 +1,13 @@
+name: Keep Bot Awake
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping bot
+        run: curl -s https://gr-debate-bot-3aeac.containers.snapdeploy.app || true
