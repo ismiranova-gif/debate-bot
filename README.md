@@ -4,6 +4,10 @@ Telegram-тренер по дебатам на греческом языке. No
 Telegram webhook и Groq (`openai/gpt-oss-120b`). История разговоров хранится
 в памяти и сбрасывается при перезапуске.
 
+Для продолжения разработки после миграции прочитайте
+[handover по деплою](docs/handover-deployment.md): изменения API,
+ограничения production и состояние на момент передачи.
+
 ## Автоматический деплой
 
 Push в `main` запускает `.github/workflows/deploy.yml`. Для pull request
