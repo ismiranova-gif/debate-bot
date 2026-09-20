@@ -1,0 +1,103 @@
+name: Deploy debate bot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debate-bot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-fund
+      - run: npm run check && npm test
+      - run: npm audit --omit=dev --audit-level=high
+
+      - name: Configure SSH and validate secrets
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$DEPLOY_SSH_KEY" || { echo 'Missing DEPLOY_SSH_KEY'; exit 1; }
+          test -n "$TELEGRAM_TOKEN" || { echo 'Missing TELEGRAM_TOKEN'; exit 1; }
+          test -n "$GROQ_API_KEY" || { echo 'Missing GROQ_API_KEY'; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/debate_deploy
+          ssh-keygen -y -f ~/.ssh/debate_deploy > /dev/null
+          install -m 600 deploy/known_hosts ~/.ssh/debate_known_hosts
+          cat > ~/.ssh/config <<'SSH_CONFIG'
+          Host debate-production
+            HostName 185.183.157.185
+            User deploy
+            Port 22
+            IdentityFile ~/.ssh/debate_deploy
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/debate_known_hosts
+            ConnectTimeout 15
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          SSH_CONFIG
+          ssh debate-production 'test -w /srv/debate-bot/incoming'
+
+      - name: Deploy release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          release="${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git archive --format=tar.gz -o "$RUNNER_TEMP/release.tar.gz" HEAD
+          python3 - <<'PY'
+          import os, pathlib, re
+          values = {name: os.environ[name].strip() for name in ('TELEGRAM_TOKEN', 'GROQ_API_KEY')}
+          for name, value in values.items():
+              if not re.fullmatch(r'[A-Za-z0-9_:\-]+', value):
+                  raise SystemExit(f'Invalid format for {name}')
+          values.update(WEBHOOK_URL='https://185.183.157.185', WEBHOOK_CERTIFICATE='/etc/debate-bot/webhook.pem', HOST='127.0.0.1', PORT='3000', REVISION=os.environ['GITHUB_SHA'])
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'release.env').write_text(''.join(f'{key}={value}\n' for key,value in values.items()))
+          PY
+          trap 'rm -f "$RUNNER_TEMP/release.env" "$RUNNER_TEMP/release.tar.gz"' EXIT
+          scp "$RUNNER_TEMP/release.tar.gz" "debate-production:/srv/debate-bot/incoming/$release.tar.gz"
+          scp "$RUNNER_TEMP/release.env" "debate-production:/srv/debate-bot/incoming/$release.env"
+          ssh debate-production "bash -s -- '$release' '$GITHUB_SHA' 'https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID'" < deploy/activate.sh
+          curl --fail --silent --show-error --retry 3 --cacert deploy/webhook.pem https://185.183.157.185/healthz > "$RUNNER_TEMP/health.json"
+          node -e 'const fs=require("node:fs"); const d=JSON.parse(fs.readFileSync(process.argv[1])); if (!d.ready || d.revision!==process.env.GITHUB_SHA) process.exit(1)' "$RUNNER_TEMP/health.json"
+          echo "Deployed commit $GITHUB_SHA to 185.183.157.185" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record deployment result and remove runner key
+        if: always() && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if test -f ~/.ssh/debate_deploy; then
+            python3 - <<'PY' | ssh debate-production 'umask 077; cat > /srv/debate-bot/last-ci-run.json'
+          import json, os
+          print(json.dumps({'revision':os.environ['GITHUB_SHA'], 'status':os.environ['JOB_STATUS'], 'run_url':f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"}))
+          PY
+          fi
+          rm -f ~/.ssh/debate_deploy "$RUNNER_TEMP/release.env"
