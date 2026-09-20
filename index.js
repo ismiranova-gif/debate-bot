@@ -7,7 +7,7 @@ const express = require('express');
 const systemPrompt = require('./systemPrompt');
 
 function configuration(env = process.env) {
-  for (const name of ['TELEGRAM_TOKEN', 'GROQ_API_KEY', 'WEBHOOK_URL']) {
+  for (const name of ['TELEGRAM_TOKEN', 'GROQ_API_KEY', 'WEBHOOK_URL', 'WEBHOOK_CERTIFICATE']) {
     if (!env[name]?.trim()) throw new Error(`Missing configuration: ${name}`);
   }
   const url = new URL(env.WEBHOOK_URL);
@@ -78,14 +78,25 @@ function createApplication(config, dependencies = {}) {
     void handleMessage(req.body.message);
   });
   app.get('/', (req, res) => res.send('Bot is running'));
-  app.get('/healthz', (req, res) => res.status(ready ? 200 : 503).json({ ready, revision: config.revision }));
+  app.get('/healthz', async (req, res) => {
+    let webhookMatches = false;
+    if (ready) {
+      try {
+        const info = await api.getWebhookInfo();
+        webhookMatches = info.url === config.webhookUrl && info.has_custom_certificate === true;
+      } catch { /* An unreachable API must not produce a successful health check. */ }
+    }
+    res.status(webhookMatches ? 200 : 503).json({ ready: webhookMatches, revision: config.revision });
+  });
 
   async function registerWebhook() {
     const options = {
       url: config.webhookUrl, secret_token: config.secret,
       allowed_updates: ['message'], drop_pending_updates: false,
     };
-    if (config.certificate) options.certificate = new InputFile(readFileSync(config.certificate), { filename: 'webhook.pem' });
+    // Read the server-only certificate before touching Telegram. Legacy hosts
+    // without this configuration cannot take over the production webhook.
+    options.certificate = new InputFile(readFileSync(config.certificate), { filename: 'webhook.pem' });
     await api.setWebhook(options);
     const info = await api.getWebhookInfo();
     if (info.url !== config.webhookUrl || (config.certificate && !info.has_custom_certificate)) throw new Error('Webhook verification failed');

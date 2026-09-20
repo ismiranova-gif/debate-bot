@@ -5,13 +5,14 @@ const { configuration, createApplication } = require('../index');
 const { mkdtempSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const env = { TELEGRAM_TOKEN: '12345:test-token', GROQ_API_KEY: 'test-key', WEBHOOK_URL: 'https://185.183.157.185', REVISION: 'test-revision' };
+const env = { TELEGRAM_TOKEN: '12345:test-token', GROQ_API_KEY: 'test-key', WEBHOOK_URL: 'https://185.183.157.185', WEBHOOK_CERTIFICATE: join(__dirname, '../deploy/webhook.pem'), REVISION: 'test-revision' };
 
 test('configuration rejects missing secrets and non-HTTPS URL', () => {
   assert.throws(() => configuration({}), /TELEGRAM_TOKEN/);
   assert.throws(() => configuration({ ...env, WEBHOOK_URL: 'http://example.com' }), /HTTPS/);
   assert.equal(configuration(env).webhookUrl, 'https://185.183.157.185/telegram');
   assert.equal(configuration(env).secret.length, 64);
+  assert.throws(() => configuration({ ...env, WEBHOOK_CERTIFICATE: '' }), /WEBHOOK_CERTIFICATE/);
 });
 
 test('webhook registers certificate, authenticates requests and reports readiness', async t => {
@@ -42,6 +43,17 @@ test('webhook registers certificate, authenticates requests and reports readines
   assert.equal(sent.length, 0);
   assert.equal((await fetch(url + '/telegram', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Telegram-Bot-Api-Secret-Token': config.secret }, body })).status, 200);
   assert.equal(sent[0].chat_id, 42);
+  api.getWebhookInfo = async () => ({ url: 'https://legacy.example/telegram', has_custom_certificate: false });
+  assert.equal((await fetch(url + '/healthz')).status, 503);
+});
+
+test('missing server certificate cannot change the Telegram webhook', async t => {
+  let called = false;
+  const runtime = createApplication(configuration({ ...env, WEBHOOK_CERTIFICATE: '/nonexistent/certificate.pem' }), {
+    api: { setWebhook: async () => { called = true; } }, groq: {},
+  }); t.after(runtime.close);
+  await assert.rejects(runtime.registerWebhook(), /ENOENT/);
+  assert.equal(called, false);
 });
 
 test('registration failure leaves health unready', async t => {
